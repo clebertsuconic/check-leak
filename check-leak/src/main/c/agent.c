@@ -338,7 +338,7 @@ JNIEXPORT void JNICALL Java_io_github_checkleak_core_CheckLeak_forceGC
   (JNIEnv * env, jobject thisObject)
 {
 
-   (*jvmti)->ForceGarbageCollection(jvmti);
+   //(*jvmti)->ForceGarbageCollection(jvmti);
 }
 
 jvmtiIterationControl JNICALL iterate_getAllObjects
@@ -367,7 +367,7 @@ JNIEXPORT jobjectArray JNICALL Java_io_github_checkleak_core_CheckLeak_getAllObj
   (JNIEnv * env, jobject jvmtiInteface_this, jclass klass) {
 
 
-  (*jvmti)->ForceGarbageCollection(jvmti);
+  //(*jvmti)->ForceGarbageCollection(jvmti);
 
   releaseTags();
 
@@ -745,7 +745,7 @@ JNIEXPORT void JNICALL Java_io_github_checkleak_core_CheckLeak_notifyInventory
 
   fflush(stderr);
   iterate.genericCount=classCount + 1000;
-  (*jvmti)->ForceGarbageCollection(jvmti);
+  //(*jvmti)->ForceGarbageCollection(jvmti);
 
 
   fflush(stderr);
