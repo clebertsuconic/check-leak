@@ -31,20 +31,25 @@ import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BiConsumer;
+import java.util.function.Consumer;
 
 import com.sun.tools.attach.VirtualMachine;
+import io.github.checkleak.core.util.DateOps;
 import sun.tools.attach.HotSpotVirtualMachine;
 
 public class RemoteCheckLeak implements Runnable {
 
    volatile ExecutorService executorService;
-   private volatile File report;
+   private File report;
+   private File logs;
    private long sleep = 60_000;
    volatile boolean active = true;
 
@@ -71,6 +76,9 @@ public class RemoteCheckLeak implements Runnable {
 
    public RemoteCheckLeak setReport(File report) {
       this.report = report;
+      this.logs = new File(report, "logs");
+      this.logs.mkdirs();
+
       executorService = Executors.newSingleThreadExecutor();
       try {
          TableGenerator.installStuff(report);
@@ -142,6 +150,11 @@ public class RemoteCheckLeak implements Runnable {
                   }
                   i++;
                }
+            }
+
+            if (report != null && sleep < 1000) {
+               printUsage("It is dangerous to use report with a very short sleep (less than 1 second). Reports may still being generated in the background while the next scan is being performed.");
+               System.exit(-1);
             }
          } catch (Throwable e) {
             e.printStackTrace();
@@ -217,26 +230,36 @@ public class RemoteCheckLeak implements Runnable {
       final Set<String> zeroNames = new HashSet<>();
       zeroNames.addAll(maxValues.keySet());
       long time = System.currentTimeMillis();
-      getHistogram(time, (line, histogram) -> {
-         zeroNames.remove(histogram.name);
-         Histogram currentMaxValue = maxValues.get(histogram.name);
+      File histogramFile = new File(logs, DateOps.getHistogramFileName(time));
+      File threadDumpFile = new File(logs, DateOps.getTDumpFileName(time));
+      try (PrintStream histogramOutputStream = new PrintStream(new BufferedOutputStream(new FileOutputStream(histogramFile)))) {
+         getHistogram(time, histogramOutputStream, (line, histogram) -> {
+            zeroNames.remove(histogram.name);
+            Histogram currentMaxValue = maxValues.get(histogram.name);
 
-         if (currentMaxValue == null) {
-            maxValues.put(histogram.name, histogram);
-            try {
-               histogram.onOver(true, histogram.copy(), report, executorService);
-            } catch (Exception e) {
-               e.printStackTrace();
+            if (currentMaxValue == null) {
+               maxValues.put(histogram.name, histogram);
+               try {
+                  histogram.onOver(true, histogram.copy(), report, executorService);
+               } catch (Exception e) {
+                  e.printStackTrace();
+               }
+            } else {
+               try {
+                  currentMaxValue.check(histogram, report, executorService);
+               } catch (Exception e) {
+                  e.printStackTrace();
+               }
             }
-         } else {
-            try {
-               currentMaxValue.check(histogram, report, executorService);
-            } catch (Exception e) {
-               e.printStackTrace();
-            }
-         }
-      });
+         });
+      }
 
+      try (PrintStream outDump = new PrintStream(new BufferedOutputStream(new FileOutputStream(threadDumpFile)))) {
+         getThreadDump(outDump);
+      }
+
+      // the GC Histogram will simply ignore any class that now has 0 instances.
+      // This is to filter the ones that disappeared so we can show them zeroed in the charts
       zeroNames.forEach(zero -> {
          Histogram zeroed = new Histogram(zero, 0l, 0l, time);
          Histogram currrentMaxValue = maxValues.get(zero);
@@ -248,29 +271,51 @@ public class RemoteCheckLeak implements Runnable {
             }
          }
       });
-
    }
 
-   public void getHistogram(long time, BiConsumer<String, Histogram> consumer) throws Exception {
-      InputStream inputStream = execute("GC.class_histogram");
-      BufferedReader reader = new BufferedReader(new InputStreamReader(inputStream));
-      int lineNumber = 0;
+   private void execute(String command, Consumer<String> lineConsumer) throws Exception {
+      try (InputStream inputStream = execute(command)) {
+         BufferedReader reader = new BufferedReader(new InputStreamReader(inputStream));
+         String line = null;
+         while ((line = reader.readLine()) != null) {
+            lineConsumer.accept(line);
+         }
+      }
+   }
 
-      String line = null;
-      while ((line = reader.readLine()) != null) {
-         lineNumber++;
-         if (lineNumber <= 2) {
-            continue;
+   public void getThreadDump(PrintStream output) throws Exception {
+      execute("Thread.print", output::println);
+   }
+
+   public Map<String, Histogram> parseHistogram() throws Exception {
+      HashMap<String, Histogram> histogramHashMap = new HashMap<>();
+
+      getHistogram(System.currentTimeMillis(), null, (line, histogram) -> {
+         histogramHashMap.put(histogram.name, histogram);
+      });
+
+      return histogramHashMap;
+   }
+
+   public void getHistogram(long time, PrintStream output, BiConsumer<String, Histogram> consumer) throws Exception {
+      AtomicInteger lineNumber = new AtomicInteger(0);
+      execute("GC.class_histogram", line -> {
+         if (output != null) {
+            output.println(line);
+         }
+         int currentLineNumber = lineNumber.incrementAndGet();
+         if (currentLineNumber <= 2) {
+            return;
          }
 
          if (line.startsWith("Total")) {
-            continue;
+            return;
          }
 
          Histogram histogram = Histogram.parseLine(line, time);
 
          consumer.accept(line, histogram);
-      }
+      });
    }
 
    public void disconnect() throws Exception {

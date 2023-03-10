@@ -19,6 +19,7 @@ package io.github.checkleak.core;
 
 import java.io.File;
 import java.util.ArrayList;
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -110,7 +111,7 @@ public class RemoteAgentTest {
 
       RemoteCheckLeak remoteCheckLeak = new RemoteCheckLeak();
       remoteCheckLeak.connect("" + process.pid());
-      remoteCheckLeak.getHistogram(System.currentTimeMillis(), (line, histogram) -> {
+      remoteCheckLeak.getHistogram(System.currentTimeMillis(), null, (line, histogram) -> {
          if (histogram.name == null || histogram.name.trim().equals("")) {
             System.out.println("Line " + line + " is generating " + histogram);
             errors.incrementAndGet();
@@ -120,6 +121,7 @@ public class RemoteAgentTest {
       Assertions.assertEquals(0, errors.get());
    }
 
+   // Execute the test, look at the ./target/RemoteAgentTest and inspect the UI output
    @Test
    public void testRemoteRun() throws Exception {
       process = SpawnJava.spawn(RemoteAgentTest.class.getName(), new String[]{"test"});
@@ -131,6 +133,10 @@ public class RemoteAgentTest {
       deleteDirectory(report);
       remoteCheckLeak.setReport(report);
       remoteCheckLeak.connect("" + process.pid());
+
+      Map<String, Histogram> histogramMap = remoteCheckLeak.parseHistogram();
+      Assertions.assertFalse(histogramMap.isEmpty());
+
       remoteCheckLeak.setSleep(100);
       Thread t = new Thread(remoteCheckLeak);
       t.start();
